@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useVideoCallStore } from '#/store/useVideoCallStore'
+import { Mic, MicOff, Video, VideoOff } from 'lucide-react'
 import './VideoCall.css'
 
 export function VideoCall() {
@@ -8,6 +9,8 @@ export function VideoCall() {
     isConnected,
     isConnecting,
     hasCamera,
+    isVideoEnabled,
+    isAudioEnabled,
     localStream,
     remoteStream,
     setRoomName,
@@ -15,6 +18,8 @@ export function VideoCall() {
     stopCamera,
     joinRoom,
     leaveRoom,
+    toggleVideo,
+    toggleAudio,
   } = useVideoCallStore()
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -54,6 +59,16 @@ export function VideoCall() {
                 {!hasCamera && (
                     <div className="camera-prompt">
                         <button className="primary-btn" onClick={startCamera}>Start Camera</button>
+                    </div>
+                )}
+                {hasCamera && (
+                    <div className="local-controls" style={{ position: 'absolute', bottom: '1rem', right: '1rem', display: 'flex', gap: '0.5rem', zIndex: 10 }}>
+                        <button onClick={toggleAudio} style={{ background: 'rgba(0,0,0,0.6)', border: 'none', borderRadius: '50%', padding: '0.5rem', cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.8)'} onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.6)'}>
+                            {isAudioEnabled ? <Mic size={20} /> : <MicOff size={20} color="#ef4444" />}
+                        </button>
+                        <button onClick={toggleVideo} style={{ background: 'rgba(0,0,0,0.6)', border: 'none', borderRadius: '50%', padding: '0.5rem', cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.8)'} onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.6)'}>
+                            {isVideoEnabled ? <Video size={20} /> : <VideoOff size={20} color="#ef4444" />}
+                        </button>
                     </div>
                 )}
             </div>

@@ -5,6 +5,8 @@ interface VideoCallState {
   isConnected: boolean
   isConnecting: boolean
   hasCamera: boolean
+  isVideoEnabled: boolean
+  isAudioEnabled: boolean
   
   socket: WebSocket | null
   peerConnection: RTCPeerConnection | null
@@ -15,6 +17,8 @@ interface VideoCallState {
   setRoomName: (val: string) => void
   startCamera: () => Promise<void>
   stopCamera: () => void
+  toggleVideo: () => void
+  toggleAudio: () => void
   
   joinRoom: () => void
   leaveRoom: () => void
@@ -26,6 +30,8 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
   isConnected: false,
   isConnecting: false,
   hasCamera: false,
+  isVideoEnabled: true,
+  isAudioEnabled: true,
 
   socket: null,
   peerConnection: null,
@@ -37,7 +43,7 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
   startCamera: async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-      set({ localStream: stream, hasCamera: true })
+      set({ localStream: stream, hasCamera: true, isVideoEnabled: true, isAudioEnabled: true })
     } catch (err) {
       console.error('Error accessing media devices.', err)
       alert('Could not access camera/microphone. Please allow permissions.')
@@ -61,6 +67,8 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
       peerConnection: null,
       socket: null,
       hasCamera: false,
+      isVideoEnabled: true,
+      isAudioEnabled: true,
       isConnected: false,
       isConnecting: false,
       roomName: ''
@@ -80,6 +88,22 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
       isConnecting: false,
       roomName: ''
     })
+  },
+
+  toggleVideo: () => {
+    const { localStream, isVideoEnabled } = get()
+    if (localStream) {
+      localStream.getVideoTracks().forEach(t => t.enabled = !isVideoEnabled)
+      set({ isVideoEnabled: !isVideoEnabled })
+    }
+  },
+
+  toggleAudio: () => {
+    const { localStream, isAudioEnabled } = get()
+    if (localStream) {
+      localStream.getAudioTracks().forEach(t => t.enabled = !isAudioEnabled)
+      set({ isAudioEnabled: !isAudioEnabled })
+    }
   },
 
   joinRoom: () => {
