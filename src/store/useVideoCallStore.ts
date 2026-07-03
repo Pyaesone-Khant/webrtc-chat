@@ -1,43 +1,38 @@
 import { create } from 'zustand'
 
 interface VideoCallState {
-  localConnection: string
-  remoteConnection: string
+  roomName: string
   isConnected: boolean
-  setupStep: number
-  isGathering: boolean
+  isConnecting: boolean
   hasCamera: boolean
   
+  socket: WebSocket | null
   peerConnection: RTCPeerConnection | null
   localStream: MediaStream | null
   remoteStream: MediaStream | null
 
   // Actions
-  setRemoteConnection: (val: string) => void
-  setSetupStep: (val: number) => void
-
+  setRoomName: (val: string) => void
   startCamera: () => Promise<void>
   stopCamera: () => void
+  
+  joinRoom: () => void
+  leaveRoom: () => void
   initPeerConnection: () => void
-  createOffer: () => Promise<void>
-  createAnswer: () => Promise<void>
-  acceptAnswer: () => Promise<void>
 }
 
 export const useVideoCallStore = create<VideoCallState>((set, get) => ({
-  localConnection: '',
-  remoteConnection: '',
+  roomName: '',
   isConnected: false,
-  setupStep: 1,
-  isGathering: false,
+  isConnecting: false,
   hasCamera: false,
 
+  socket: null,
   peerConnection: null,
   localStream: null,
   remoteStream: null,
 
-  setRemoteConnection: (val) => set({ remoteConnection: val }),
-  setSetupStep: (val) => set({ setupStep: val }),
+  setRoomName: (val) => set({ roomName: val }),
 
   startCamera: async () => {
     try {
@@ -50,23 +45,105 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
   },
 
   stopCamera: () => {
-    const { localStream, peerConnection } = get()
+    const { localStream, peerConnection, socket } = get()
     if (localStream) {
       localStream.getTracks().forEach(track => track.stop())
     }
     if (peerConnection) {
       peerConnection.close()
     }
+    if (socket) {
+      socket.close()
+    }
     set({
       localStream: null,
       remoteStream: null,
       peerConnection: null,
+      socket: null,
       hasCamera: false,
       isConnected: false,
-      localConnection: '',
-      remoteConnection: '',
-      setupStep: 1,
+      isConnecting: false,
+      roomName: ''
     })
+  },
+
+  leaveRoom: () => {
+    const { peerConnection, socket } = get()
+    if (peerConnection) peerConnection.close()
+    if (socket) socket.close()
+    
+    set({
+      peerConnection: null,
+      socket: null,
+      remoteStream: null,
+      isConnected: false,
+      isConnecting: false,
+      roomName: ''
+    })
+  },
+
+  joinRoom: () => {
+    const { roomName, hasCamera } = get()
+    if (!roomName) return
+    if (!hasCamera) {
+      alert("Please start the camera first!")
+      return
+    }
+
+    const ws = new WebSocket(`ws://${window.location.hostname}:8080`)
+    set({ socket: ws, isConnecting: true })
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'join', room: roomName }))
+    }
+
+    ws.onmessage = async (event) => {
+      const msg = JSON.parse(event.data)
+      const { socket, initPeerConnection } = get()
+
+      if (msg.type === 'peer-joined') {
+        initPeerConnection()
+        const { peerConnection } = get()
+        if (!peerConnection) return
+
+        const offer = await peerConnection.createOffer()
+        await peerConnection.setLocalDescription(offer)
+        
+        socket?.send(JSON.stringify({
+          type: 'signal',
+          payload: { type: 'offer', data: peerConnection.localDescription }
+        }))
+      } else if (msg.type === 'signal') {
+        const { payload } = msg
+        initPeerConnection()
+        const { peerConnection } = get()
+        if (!peerConnection) return
+
+        if (payload.type === 'offer') {
+          await peerConnection.setRemoteDescription(payload.data)
+          const answer = await peerConnection.createAnswer()
+          await peerConnection.setLocalDescription(answer)
+          
+          socket?.send(JSON.stringify({
+            type: 'signal',
+            payload: { type: 'answer', data: peerConnection.localDescription }
+          }))
+        } else if (payload.type === 'answer') {
+          await peerConnection.setRemoteDescription(payload.data)
+        } else if (payload.type === 'ice-candidate') {
+          await peerConnection.addIceCandidate(payload.data)
+        }
+      } else if (msg.type === 'peer-left') {
+        alert('Peer has left the room.')
+        const { peerConnection } = get()
+        if (peerConnection) peerConnection.close()
+        set({
+          peerConnection: null,
+          remoteStream: null,
+          isConnected: false
+        })
+      }
+    }
   },
 
   initPeerConnection: () => {
@@ -88,92 +165,26 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
         let stream = state.remoteStream
         if (!stream) stream = new MediaStream()
         stream.addTrack(event.track)
-        // Clone stream reference so React/Zustand detects change
         return { remoteStream: new MediaStream(stream.getTracks()) }
       })
     }
 
     pc.onicecandidate = (event) => {
-      if (event.candidate === null) {
-        set({
-          localConnection: JSON.stringify(pc.localDescription),
-          isGathering: false
-        })
+      const { socket } = get()
+      if (event.candidate && socket && socket.readyState === 1) {
+        socket.send(JSON.stringify({
+          type: 'signal',
+          payload: { type: 'ice-candidate', data: event.candidate }
+        }))
       }
     }
 
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'connected') {
-        set({ isConnected: true })
+        set({ isConnected: true, isConnecting: false })
       }
     }
 
     set({ peerConnection: pc })
-  },
-
-  createOffer: async () => {
-    const { hasCamera } = get()
-    if (!hasCamera) {
-      alert("Please start the camera first!")
-      return
-    }
-
-    set({ isGathering: true })
-    const { initPeerConnection } = get()
-    initPeerConnection()
-
-    const { peerConnection } = get()
-    if (!peerConnection) {
-      set({ isGathering: false })
-      return
-    }
-
-    const offer = await peerConnection.createOffer()
-    await peerConnection.setLocalDescription(offer)
-    set({ setupStep: 1 })
-  },
-
-  createAnswer: async () => {
-    const { hasCamera, remoteConnection } = get()
-    if (!hasCamera) {
-      alert("Please start the camera first!")
-      return
-    }
-
-    set({ isGathering: true })
-    const { initPeerConnection } = get()
-    initPeerConnection()
-
-    const { peerConnection } = get()
-    if (!peerConnection) {
-      set({ isGathering: false })
-      return
-    }
-
-    try {
-      const offerObj = JSON.parse(remoteConnection)
-      await peerConnection.setRemoteDescription(offerObj)
-
-      const answer = await peerConnection.createAnswer()
-      await peerConnection.setLocalDescription(answer)
-      set({ setupStep: 2 })
-    } catch (e) {
-      console.error("Invalid offer string", e)
-      alert("Invalid offer string!")
-      set({ isGathering: false })
-    }
-  },
-
-  acceptAnswer: async () => {
-    const { peerConnection, remoteConnection } = get()
-    if (!peerConnection) return
-
-    try {
-      const answerObj = JSON.parse(remoteConnection)
-      await peerConnection.setRemoteDescription(answerObj)
-    } catch (e) {
-      console.error("Invalid answer string", e)
-      alert("Invalid answer string!")
-    }
   }
 }))

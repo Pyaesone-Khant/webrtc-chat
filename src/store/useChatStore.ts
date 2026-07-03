@@ -1,52 +1,126 @@
 import { create } from 'zustand'
 
 export type ChatMessage = {
-  sender: 'you' | 'them'
+  sender: 'you' | 'them' | 'system'
   text: string
 }
 
 interface ChatState {
-  localConnection: string
-  remoteConnection: string
+  roomName: string
   chatMessages: ChatMessage[]
   messageInput: string
   isConnected: boolean
-  setupStep: number
-  isGathering: boolean
-  
+  isConnecting: boolean
+
+  socket: WebSocket | null
   peerConnection: RTCPeerConnection | null
   dataChannel: RTCDataChannel | null
 
   // Actions
-  setLocalConnection: (val: string) => void
-  setRemoteConnection: (val: string) => void
+  setRoomName: (val: string) => void
   setMessageInput: (val: string) => void
-  setSetupStep: (val: number) => void
 
+  joinRoom: () => void
+  leaveRoom: () => void
   initPeerConnection: () => void
   setupDataChannelListeners: () => void
-  createOffer: () => Promise<void>
-  createAnswer: () => Promise<void>
-  acceptAnswer: () => Promise<void>
   sendMsg: () => void
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
-  localConnection: '',
-  remoteConnection: '',
+  roomName: '',
   chatMessages: [],
   messageInput: '',
   isConnected: false,
-  setupStep: 1,
-  isGathering: false,
+  isConnecting: false,
 
+  socket: null,
   peerConnection: null,
   dataChannel: null,
 
-  setLocalConnection: (val) => set({ localConnection: val }),
-  setRemoteConnection: (val) => set({ remoteConnection: val }),
+  setRoomName: (val) => set({ roomName: val }),
   setMessageInput: (val) => set({ messageInput: val }),
-  setSetupStep: (val) => set({ setupStep: val }),
+
+  leaveRoom: () => {
+    const { peerConnection, socket, dataChannel } = get()
+    if (dataChannel) dataChannel.close()
+    if (peerConnection) peerConnection.close()
+    if (socket) socket.close()
+    set({
+      isConnected: false,
+      isConnecting: false,
+      roomName: '',
+      chatMessages: [],
+      peerConnection: null,
+      dataChannel: null,
+      socket: null
+    })
+  },
+
+  joinRoom: () => {
+    const { roomName } = get()
+    if (!roomName) return
+
+    const ws = new WebSocket(`ws://${window.location.hostname}:8080`)
+    set({ socket: ws, isConnecting: true })
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'join', room: roomName }))
+    }
+
+    ws.onmessage = async (event) => {
+      const msg = JSON.parse(event.data)
+      const { socket, initPeerConnection, setupDataChannelListeners } = get()
+
+      if (msg.type === 'peer-joined') {
+        initPeerConnection()
+        const { peerConnection } = get()
+        if (!peerConnection) return
+
+        const dc = peerConnection.createDataChannel('chat-channel')
+        set({ dataChannel: dc })
+        setupDataChannelListeners()
+
+        const offer = await peerConnection.createOffer()
+        await peerConnection.setLocalDescription(offer)
+
+        socket?.send(JSON.stringify({
+          type: 'signal',
+          payload: { type: 'offer', data: peerConnection.localDescription }
+        }))
+      } else if (msg.type === 'signal') {
+        const { payload } = msg
+        initPeerConnection()
+        const { peerConnection } = get()
+        if (!peerConnection) return
+
+        if (payload.type === 'offer') {
+          await peerConnection.setRemoteDescription(payload.data)
+          const answer = await peerConnection.createAnswer()
+          await peerConnection.setLocalDescription(answer)
+
+          socket?.send(JSON.stringify({
+            type: 'signal',
+            payload: { type: 'answer', data: peerConnection.localDescription }
+          }))
+        } else if (payload.type === 'answer') {
+          await peerConnection.setRemoteDescription(payload.data)
+        } else if (payload.type === 'ice-candidate') {
+          await peerConnection.addIceCandidate(payload.data)
+        }
+      } else if (msg.type === 'peer-left') {
+        const { peerConnection, dataChannel } = get()
+        if (dataChannel) dataChannel.close()
+        if (peerConnection) peerConnection.close()
+        set((state) => ({
+          chatMessages: [...state.chatMessages, { sender: 'system', text: 'Peer has left the room.' }],
+          peerConnection: null,
+          dataChannel: null,
+          isConnected: false
+        }))
+      }
+    }
+  },
 
   initPeerConnection: () => {
     const { peerConnection } = get()
@@ -57,17 +131,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })
 
     pc.onicecandidate = (event) => {
-      if (event.candidate === null) {
-        set({
-          localConnection: JSON.stringify(pc.localDescription),
-          isGathering: false
-        })
+      const { socket } = get()
+      if (event.candidate && socket && socket.readyState === 1) {
+        socket.send(JSON.stringify({
+          type: 'signal',
+          payload: { type: 'ice-candidate', data: event.candidate }
+        }))
       }
     }
 
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'connected') {
-        set({ isConnected: true })
+        set({ isConnected: true, isConnecting: false })
       }
     }
 
@@ -89,64 +164,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         chatMessages: [...state.chatMessages, { sender: 'them', text: event.data }]
       }))
     }
-    dataChannel.onopen = () => set({ isConnected: true })
-  },
-
-  createOffer: async () => {
-    set({ isGathering: true })
-    const { initPeerConnection } = get()
-    initPeerConnection()
-
-    const { peerConnection, setupDataChannelListeners } = get()
-    if (!peerConnection) {
-      set({ isGathering: false })
-      return
-    }
-
-    const dc = peerConnection.createDataChannel('chat-channel')
-    set({ dataChannel: dc })
-    setupDataChannelListeners()
-
-    const offer = await peerConnection.createOffer()
-    await peerConnection.setLocalDescription(offer)
-    set({ setupStep: 1 })
-  },
-
-  createAnswer: async () => {
-    set({ isGathering: true })
-    const { initPeerConnection } = get()
-    initPeerConnection()
-    
-    const { peerConnection, remoteConnection } = get()
-    if (!peerConnection) {
-      set({ isGathering: false })
-      return
-    }
-
-    try {
-      const offerObj = JSON.parse(remoteConnection)
-      await peerConnection.setRemoteDescription(offerObj)
-
-      const answer = await peerConnection.createAnswer()
-      await peerConnection.setLocalDescription(answer)
-    } catch (e) {
-      console.error("Invalid offer string", e)
-      alert("Invalid offer string!")
-      set({ isGathering: false })
-    }
-  },
-
-  acceptAnswer: async () => {
-    const { peerConnection, remoteConnection } = get()
-    if (!peerConnection) return
-
-    try {
-      const answerObj = JSON.parse(remoteConnection)
-      await peerConnection.setRemoteDescription(answerObj)
-    } catch (e) {
-      console.error("Invalid answer string", e)
-      alert("Invalid answer string!")
-    }
+    dataChannel.onopen = () => set({ isConnected: true, isConnecting: false })
   },
 
   sendMsg: () => {

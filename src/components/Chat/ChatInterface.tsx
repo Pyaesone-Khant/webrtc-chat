@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useChatStore } from '#/store/useChatStore'
 
 export function ChatInterface() {
-  const { chatMessages, messageInput, setMessageInput, sendMsg } = useChatStore()
+  const { chatMessages, messageInput, setMessageInput, sendMsg, leaveRoom } = useChatStore()
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -16,8 +16,11 @@ export function ChatInterface() {
   return (
     <div className="chat-interface fade-in">
       <div className="chat-header">
-        <span className="status-indicator online"></span>
-        <span className="status-text">Connected via WebRTC</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span className="status-indicator online"></span>
+          <span className="status-text">Connected via WebRTC</span>
+        </div>
+        <button onClick={leaveRoom} style={{ background: '#ef4444', color: 'white', border: 'none', padding: '0.25rem 0.75rem', borderRadius: '0.25rem', cursor: 'pointer', fontSize: '0.875rem' }}>Leave Room</button>
       </div>
       
       <div className="chat-messages">
@@ -25,7 +28,7 @@ export function ChatInterface() {
           <div className="empty-state">No messages yet. Say hi!</div>
         ) : (
           chatMessages.map((msg, idx) => (
-            <div key={idx} className={`message-bubble ${msg.sender === 'you' ? 'sent' : 'received'}`}>
+            <div key={idx} className={`message-bubble ${msg.sender === 'you' ? 'sent' : msg.sender === 'system' ? 'system' : 'received'}`} style={msg.sender === 'system' ? { alignSelf: 'center', background: 'transparent', color: '#94a3b8', fontSize: '0.875rem', padding: '0.25rem' } : {}}>
               <div className="message-content">{msg.text}</div>
             </div>
           ))
