@@ -114,7 +114,8 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
       return
     }
 
-    const ws = new WebSocket(`ws://${window.location.hostname}:8080`)
+    const wsUrl = import.meta.env.VITE_WS_URL || `ws://${window.location.hostname}:8080`
+    const ws = new WebSocket(wsUrl)
     set({ socket: ws, isConnecting: true })
 
     ws.onopen = () => {

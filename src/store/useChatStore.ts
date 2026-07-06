@@ -61,7 +61,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { roomName } = get()
     if (!roomName) return
 
-    const ws = new WebSocket(`ws://${window.location.hostname}:8080`)
+    const wsUrl = import.meta.env.VITE_WS_URL || `ws://${window.location.hostname}:8080`
+    const ws = new WebSocket(wsUrl)
     set({ socket: ws, isConnecting: true })
 
     ws.onopen = () => {
