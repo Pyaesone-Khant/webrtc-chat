@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import type { RealtimeChannel } from '@supabase/supabase-js'
+import { supabase } from '../utils/supabase'
 
 export type ChatMessage = {
   sender: 'you' | 'them' | 'system'
@@ -12,7 +14,7 @@ interface ChatState {
   isConnected: boolean
   isConnecting: boolean
 
-  socket: WebSocket | null
+  channel: RealtimeChannel | null
   peerConnection: RTCPeerConnection | null
   dataChannel: RTCDataChannel | null
 
@@ -34,7 +36,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   isConnected: false,
   isConnecting: false,
 
-  socket: null,
+  channel: null,
   peerConnection: null,
   dataChannel: null,
 
@@ -42,10 +44,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setMessageInput: (val) => set({ messageInput: val }),
 
   leaveRoom: () => {
-    const { peerConnection, socket, dataChannel } = get()
+    const { peerConnection, channel, dataChannel } = get()
     if (dataChannel) dataChannel.close()
     if (peerConnection) peerConnection.close()
-    if (socket) socket.close()
+    if (channel) {
+      channel.unsubscribe()
+      supabase.removeChannel(channel)
+    }
     set({
       isConnected: false,
       isConnecting: false,
@@ -53,7 +58,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       chatMessages: [],
       peerConnection: null,
       dataChannel: null,
-      socket: null
+      channel: null
     })
   },
 
@@ -61,19 +66,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { roomName } = get()
     if (!roomName) return
 
-    const wsUrl = import.meta.env.VITE_WS_URL || `ws://${window.location.hostname}:8080`
-    const ws = new WebSocket(wsUrl)
-    set({ socket: ws, isConnecting: true })
+    set({ isConnecting: true })
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'join', room: roomName }))
-    }
+    const myUserId = Math.random().toString(36).substring(2, 15)
+    const channel = supabase.channel(`chat_${roomName}`, {
+      config: {
+        broadcast: { ack: false },
+        presence: { key: myUserId },
+      },
+    })
 
-    ws.onmessage = async (event) => {
-      const msg = JSON.parse(event.data)
-      const { socket, initPeerConnection, setupDataChannelListeners } = get()
+    set({ channel })
 
-      if (msg.type === 'peer-joined') {
+    channel
+      .on('presence', { event: 'join' }, ({ newPresences }) => {
+        // Check if the joined presence is us
+        const isMe = newPresences.some(p => p.id === myUserId)
+        if (isMe) return // Don't create offer for ourselves
+
+        const { initPeerConnection, setupDataChannelListeners } = get()
         initPeerConnection()
         const { peerConnection } = get()
         if (!peerConnection) return
@@ -82,15 +93,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set({ dataChannel: dc })
         setupDataChannelListeners()
 
-        const offer = await peerConnection.createOffer()
-        await peerConnection.setLocalDescription(offer)
+        peerConnection.createOffer().then(offer => {
+          return peerConnection.setLocalDescription(offer).then(() => {
+            channel.send({
+              type: 'broadcast',
+              event: 'signal',
+              payload: { type: 'offer', data: peerConnection.localDescription }
+            })
+          })
+        })
+      })
+      .on('presence', { event: 'leave' }, ({ leftPresences }) => {
+         const isMe = leftPresences.some(p => p.id === myUserId)
+         if (isMe) return
 
-        socket?.send(JSON.stringify({
-          type: 'signal',
-          payload: { type: 'offer', data: peerConnection.localDescription }
-        }))
-      } else if (msg.type === 'signal') {
-        const { payload } = msg
+         const { peerConnection, dataChannel } = get()
+         if (dataChannel) dataChannel.close()
+         if (peerConnection) peerConnection.close()
+         set((state) => ({
+           chatMessages: [...state.chatMessages, { sender: 'system', text: 'Peer has left the room.' }],
+           peerConnection: null,
+           dataChannel: null,
+           isConnected: false
+         }))
+      })
+      .on('broadcast', { event: 'signal' }, async (message) => {
+        const { payload } = message
+        const { initPeerConnection } = get()
         initPeerConnection()
         const { peerConnection } = get()
         if (!peerConnection) return
@@ -100,27 +129,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const answer = await peerConnection.createAnswer()
           await peerConnection.setLocalDescription(answer)
 
-          socket?.send(JSON.stringify({
-            type: 'signal',
+          channel.send({
+            type: 'broadcast',
+            event: 'signal',
             payload: { type: 'answer', data: peerConnection.localDescription }
-          }))
+          })
         } else if (payload.type === 'answer') {
           await peerConnection.setRemoteDescription(payload.data)
         } else if (payload.type === 'ice-candidate') {
           await peerConnection.addIceCandidate(payload.data)
         }
-      } else if (msg.type === 'peer-left') {
-        const { peerConnection, dataChannel } = get()
-        if (dataChannel) dataChannel.close()
-        if (peerConnection) peerConnection.close()
-        set((state) => ({
-          chatMessages: [...state.chatMessages, { sender: 'system', text: 'Peer has left the room.' }],
-          peerConnection: null,
-          dataChannel: null,
-          isConnected: false
-        }))
-      }
-    }
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({ id: myUserId })
+        }
+      })
   },
 
   initPeerConnection: () => {
@@ -132,12 +156,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })
 
     pc.onicecandidate = (event) => {
-      const { socket } = get()
-      if (event.candidate && socket && socket.readyState === 1) {
-        socket.send(JSON.stringify({
-          type: 'signal',
+      const { channel } = get()
+      if (event.candidate && channel) {
+        channel.send({
+          type: 'broadcast',
+          event: 'signal',
           payload: { type: 'ice-candidate', data: event.candidate }
-        }))
+        })
       }
     }
 

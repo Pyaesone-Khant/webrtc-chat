@@ -1,4 +1,6 @@
+import type { RealtimeChannel } from '@supabase/supabase-js'
 import { create } from 'zustand'
+import { supabase } from '../utils/supabase'
 
 interface VideoCallState {
   roomName: string
@@ -7,8 +9,8 @@ interface VideoCallState {
   hasCamera: boolean
   isVideoEnabled: boolean
   isAudioEnabled: boolean
-  
-  socket: WebSocket | null
+
+  channel: RealtimeChannel | null
   peerConnection: RTCPeerConnection | null
   localStream: MediaStream | null
   remoteStream: MediaStream | null
@@ -19,7 +21,7 @@ interface VideoCallState {
   stopCamera: () => void
   toggleVideo: () => void
   toggleAudio: () => void
-  
+
   joinRoom: () => void
   leaveRoom: () => void
   initPeerConnection: () => void
@@ -33,7 +35,7 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
   isVideoEnabled: true,
   isAudioEnabled: true,
 
-  socket: null,
+  channel: null,
   peerConnection: null,
   localStream: null,
   remoteStream: null,
@@ -51,21 +53,22 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
   },
 
   stopCamera: () => {
-    const { localStream, peerConnection, socket } = get()
+    const { localStream, peerConnection, channel } = get()
     if (localStream) {
       localStream.getTracks().forEach(track => track.stop())
     }
     if (peerConnection) {
       peerConnection.close()
     }
-    if (socket) {
-      socket.close()
+    if (channel) {
+      channel.unsubscribe()
+      supabase.removeChannel(channel)
     }
     set({
       localStream: null,
       remoteStream: null,
       peerConnection: null,
-      socket: null,
+      channel: null,
       hasCamera: false,
       isVideoEnabled: true,
       isAudioEnabled: true,
@@ -76,13 +79,16 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
   },
 
   leaveRoom: () => {
-    const { peerConnection, socket } = get()
+    const { peerConnection, channel } = get()
     if (peerConnection) peerConnection.close()
-    if (socket) socket.close()
-    
+    if (channel) {
+      channel.unsubscribe()
+      supabase.removeChannel(channel)
+    }
+
     set({
       peerConnection: null,
-      socket: null,
+      channel: null,
       remoteStream: null,
       isConnected: false,
       isConnecting: false,
@@ -114,51 +120,41 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
       return
     }
 
-    const wsUrl = import.meta.env.VITE_WS_URL || `ws://${window.location.hostname}:8080`
-    const ws = new WebSocket(wsUrl)
-    set({ socket: ws, isConnecting: true })
+    set({ isConnecting: true })
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'join', room: roomName }))
-    }
+    const myUserId = Math.random().toString(36).substring(2, 15)
+    const channel = supabase.channel(`video_${roomName}`, {
+      config: {
+        broadcast: { ack: false },
+        presence: { key: myUserId },
+      },
+    })
+    set({ channel })
 
-    ws.onmessage = async (event) => {
-      const msg = JSON.parse(event.data)
-      const { socket, initPeerConnection } = get()
+    channel
+      .on('presence', { event: 'join' }, ({ newPresences }) => {
+        const isMe = newPresences.some(p => p.id === myUserId)
+        if (isMe) return
 
-      if (msg.type === 'peer-joined') {
+        const { initPeerConnection } = get()
         initPeerConnection()
         const { peerConnection } = get()
         if (!peerConnection) return
 
-        const offer = await peerConnection.createOffer()
-        await peerConnection.setLocalDescription(offer)
-        
-        socket?.send(JSON.stringify({
-          type: 'signal',
-          payload: { type: 'offer', data: peerConnection.localDescription }
-        }))
-      } else if (msg.type === 'signal') {
-        const { payload } = msg
-        initPeerConnection()
-        const { peerConnection } = get()
-        if (!peerConnection) return
+        peerConnection.createOffer().then(offer => {
+          return peerConnection.setLocalDescription(offer).then(() => {
+            channel.send({
+              type: 'broadcast',
+              event: 'signal',
+              payload: { type: 'offer', data: peerConnection.localDescription }
+            })
+          })
+        })
+      })
+      .on('presence', { event: 'leave' }, ({ leftPresences }) => {
+        const isMe = leftPresences.some(p => p.id === myUserId)
+        if (isMe) return
 
-        if (payload.type === 'offer') {
-          await peerConnection.setRemoteDescription(payload.data)
-          const answer = await peerConnection.createAnswer()
-          await peerConnection.setLocalDescription(answer)
-          
-          socket?.send(JSON.stringify({
-            type: 'signal',
-            payload: { type: 'answer', data: peerConnection.localDescription }
-          }))
-        } else if (payload.type === 'answer') {
-          await peerConnection.setRemoteDescription(payload.data)
-        } else if (payload.type === 'ice-candidate') {
-          await peerConnection.addIceCandidate(payload.data)
-        }
-      } else if (msg.type === 'peer-left') {
         alert('Peer has left the room.')
         const { peerConnection } = get()
         if (peerConnection) peerConnection.close()
@@ -167,8 +163,35 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
           remoteStream: null,
           isConnected: false
         })
-      }
-    }
+      })
+      .on('broadcast', { event: 'signal' }, async (message) => {
+        const { payload } = message
+        const { initPeerConnection } = get()
+        initPeerConnection()
+        const { peerConnection } = get()
+        if (!peerConnection) return
+
+        if (payload.type === 'offer') {
+          await peerConnection.setRemoteDescription(payload.data)
+          const answer = await peerConnection.createAnswer()
+          await peerConnection.setLocalDescription(answer)
+
+          channel.send({
+            type: 'broadcast',
+            event: 'signal',
+            payload: { type: 'answer', data: peerConnection.localDescription }
+          })
+        } else if (payload.type === 'answer') {
+          await peerConnection.setRemoteDescription(payload.data)
+        } else if (payload.type === 'ice-candidate') {
+          await peerConnection.addIceCandidate(payload.data)
+        }
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({ id: myUserId })
+        }
+      })
   },
 
   initPeerConnection: () => {
@@ -195,12 +218,13 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
     }
 
     pc.onicecandidate = (event) => {
-      const { socket } = get()
-      if (event.candidate && socket && socket.readyState === 1) {
-        socket.send(JSON.stringify({
-          type: 'signal',
+      const { channel } = get()
+      if (event.candidate && channel) {
+        channel.send({
+          type: 'broadcast',
+          event: 'signal',
           payload: { type: 'ice-candidate', data: event.candidate }
-        }))
+        })
       }
     }
 
