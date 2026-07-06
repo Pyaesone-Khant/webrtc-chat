@@ -13,6 +13,7 @@ interface ChatState {
   messageInput: string
   isConnected: boolean
   isConnecting: boolean
+  callStatus: 'calling' | 'declined' | 'accepted' | null
 
   channel: RealtimeChannel | null
   peerConnection: RTCPeerConnection | null
@@ -21,6 +22,7 @@ interface ChatState {
   // Actions
   setRoomName: (val: string) => void
   setMessageInput: (val: string) => void
+  setCallStatus: (status: 'calling' | 'declined' | 'accepted' | null) => void
 
   joinRoom: () => void
   leaveRoom: () => void
@@ -35,6 +37,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messageInput: '',
   isConnected: false,
   isConnecting: false,
+  callStatus: null,
 
   channel: null,
   peerConnection: null,
@@ -42,6 +45,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setRoomName: (val) => set({ roomName: val }),
   setMessageInput: (val) => set({ messageInput: val }),
+  setCallStatus: (val) => set({ callStatus: val }),
 
   leaveRoom: () => {
     const { peerConnection, channel, dataChannel } = get()
@@ -58,7 +62,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       chatMessages: [],
       peerConnection: null,
       dataChannel: null,
-      channel: null
+      channel: null,
+      callStatus: null
     })
   },
 

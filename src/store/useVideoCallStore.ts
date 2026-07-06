@@ -9,6 +9,8 @@ interface VideoCallState {
   hasCamera: boolean
   isVideoEnabled: boolean
   isAudioEnabled: boolean
+  callStatus: 'calling' | 'declined' | 'accepted' | null
+  pendingCallFriendId: string | null
 
   channel: RealtimeChannel | null
   peerConnection: RTCPeerConnection | null
@@ -17,6 +19,8 @@ interface VideoCallState {
 
   // Actions
   setRoomName: (val: string) => void
+  setPendingCallFriendId: (id: string | null) => void
+  setCallStatus: (status: 'calling' | 'declined' | 'accepted' | null) => void
   startCamera: () => Promise<void>
   stopCamera: () => void
   toggleVideo: () => void
@@ -34,6 +38,8 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
   hasCamera: false,
   isVideoEnabled: true,
   isAudioEnabled: true,
+  callStatus: null,
+  pendingCallFriendId: null,
 
   channel: null,
   peerConnection: null,
@@ -41,6 +47,19 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
   remoteStream: null,
 
   setRoomName: (val) => set({ roomName: val }),
+  setPendingCallFriendId: (val) => set({ pendingCallFriendId: val }),
+  setCallStatus: (val) => {
+    if (val === 'declined') {
+      const { localStream, peerConnection } = get()
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop())
+      }
+      if (peerConnection) {
+        peerConnection.close()
+      }
+    }
+    set({ callStatus: val })
+  },
 
   startCamera: async () => {
     try {
@@ -70,11 +89,8 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
       peerConnection: null,
       channel: null,
       hasCamera: false,
-      isVideoEnabled: true,
-      isAudioEnabled: true,
       isConnected: false,
-      isConnecting: false,
-      roomName: ''
+      isConnecting: false
     })
   },
 
@@ -92,7 +108,9 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
       remoteStream: null,
       isConnected: false,
       isConnecting: false,
-      roomName: ''
+      roomName: '',
+      callStatus: null,
+      pendingCallFriendId: null
     })
   },
 
@@ -155,14 +173,10 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
         const isMe = leftPresences.some(p => p.id === myUserId)
         if (isMe) return
 
-        alert('Peer has left the room.')
-        const { peerConnection } = get()
-        if (peerConnection) peerConnection.close()
-        set({
-          peerConnection: null,
-          remoteStream: null,
-          isConnected: false
-        })
+        alert('Peer has left the call.')
+        const { leaveRoom, stopCamera } = get()
+        leaveRoom()
+        stopCamera()
       })
       .on('broadcast', { event: 'signal' }, async (message) => {
         const { payload } = message
