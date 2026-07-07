@@ -1,13 +1,11 @@
 import { TanStackDevtools } from '@tanstack/react-devtools'
 import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
-import { useEffect } from 'react'
 import { IncomingCallModal } from '../components/IncomingCallModal'
 import { useAuthStore } from '../store/useAuthStore'
-import { useChatStore } from '../store/useChatStore'
-import { useNotificationStore } from '../store/useNotificationStore'
-import { useVideoCallStore } from '../store/useVideoCallStore'
 
+import { useNotificationStore } from '#/store/useNotificationStore'
+import { useEffect } from 'react'
 import appCss from '../styles.css?url'
 
 export const Route = createRootRoute({
@@ -35,14 +33,9 @@ export const Route = createRootRoute({
 })
 
 function RootDocument({ children }: { children: React.ReactNode }) {
-  const {
-    session,
-    isLoading,
-    initializeAuth,
-    signInWithGoogle,
-    signOut,
-    user,
-  } = useAuthStore()
+  const { session, isLoading, initializeAuth, signInWithGoogle } =
+    useAuthStore()
+
   const { initializeNotifications, cleanupNotifications } =
     useNotificationStore()
 
@@ -57,27 +50,6 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       cleanupNotifications()
     }
   }, [session, initializeNotifications, cleanupNotifications])
-
-  useEffect(() => {
-    const handleCallResponse = (e: Event) => {
-      const customEvent = e as CustomEvent
-      const { accepted } = customEvent.detail
-      const { setCallStatus: setChatCallStatus } = useChatStore.getState()
-      const { setCallStatus: setVideoCallStatus } = useVideoCallStore.getState()
-
-      if (accepted) {
-        setChatCallStatus('accepted')
-        setVideoCallStatus('accepted')
-      } else {
-        setChatCallStatus('declined')
-        setVideoCallStatus('declined')
-      }
-    }
-
-    window.addEventListener('call_response_received', handleCallResponse)
-    return () =>
-      window.removeEventListener('call_response_received', handleCallResponse)
-  }, [])
 
   let content = children
 
@@ -114,37 +86,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </div>
     )
   } else {
-    content = (
-      <div className="h-screen w-screen flex flex-col font-sans">
-        <header className="flex items-center justify-between px-6 py-4 bg-zinc-900 border-b border-zinc-800">
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl font-bold text-white tracking-tight">
-              WebRTC<span className="text-blue-500">App</span>
-            </h1>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              {user && (
-                <img
-                  src={user.user_metadata.avatar_url}
-                  alt="Avatar"
-                  className="w-8 h-8 rounded-full border border-zinc-700"
-                />
-              )}
-            </div>
-            <button
-              onClick={signOut}
-              className="px-3 py-1.5 text-sm font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-md transition-colors border border-zinc-700"
-            >
-              Sign Out
-            </button>
-          </div>
-        </header>
-        <main className="flex-1 overflow-hidden relative bg-zinc-950">
-          {children}
-        </main>
-      </div>
-    )
+    content = children
   }
 
   return (

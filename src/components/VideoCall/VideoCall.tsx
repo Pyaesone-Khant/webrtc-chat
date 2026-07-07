@@ -4,6 +4,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { Mic, MicOff, Phone, PhoneOff, Video, VideoOff } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import './VideoCall.css'
+import { VideoCallInterface } from './VideoCallInterface'
 
 export function VideoCall() {
   const {
@@ -122,7 +123,14 @@ export function VideoCall() {
   const isPreviewState = pendingCallFriendId !== null && callStatus === null
 
   return (
-    <div className="video-container fade-in">
+    <section className="fade-in flex-1 flex h-full w-full overflow-hidden">
+      <VideoCallInterface />
+    </section>
+  )
+
+  return (
+    <div className="fade-in">
+      <VideoCallInterface />
       <div className="video-glass-panel">
         <div className="video-grid">
           <div className="video-wrapper local-wrapper">

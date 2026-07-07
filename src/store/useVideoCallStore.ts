@@ -11,6 +11,7 @@ interface VideoCallState {
   isAudioEnabled: boolean
   callStatus: 'calling' | 'declined' | 'accepted' | null
   pendingCallFriendId: string | null
+  myUserId: string | null
 
   channel: RealtimeChannel | null
   peerConnection: RTCPeerConnection | null
@@ -40,6 +41,7 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
   isAudioEnabled: true,
   callStatus: null,
   pendingCallFriendId: null,
+  myUserId: null,
 
   channel: null,
   peerConnection: null,
@@ -141,6 +143,8 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
     set({ isConnecting: true })
 
     const myUserId = Math.random().toString(36).substring(2, 15)
+    set({ myUserId })
+
     const channel = supabase.channel(`video_${roomName}`, {
       config: {
         broadcast: { ack: false },
@@ -164,7 +168,7 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
             channel.send({
               type: 'broadcast',
               event: 'signal',
-              payload: { type: 'offer', data: peerConnection.localDescription }
+              payload: { type: 'offer', data: peerConnection.localDescription, senderId: myUserId }
             })
           })
         })
@@ -180,25 +184,48 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
       })
       .on('broadcast', { event: 'signal' }, async (message) => {
         const { payload } = message
+        if (payload.senderId === myUserId) return
+
         const { initPeerConnection } = get()
         initPeerConnection()
         const { peerConnection } = get()
         if (!peerConnection) return
 
-        if (payload.type === 'offer') {
-          await peerConnection.setRemoteDescription(payload.data)
-          const answer = await peerConnection.createAnswer()
-          await peerConnection.setLocalDescription(answer)
+        try {
+          if (payload.type === 'offer') {
+            const offerCollision = peerConnection.signalingState !== 'stable'
+            const isPolite = myUserId < payload.senderId
 
-          channel.send({
-            type: 'broadcast',
-            event: 'signal',
-            payload: { type: 'answer', data: peerConnection.localDescription }
-          })
-        } else if (payload.type === 'answer') {
-          await peerConnection.setRemoteDescription(payload.data)
-        } else if (payload.type === 'ice-candidate') {
-          await peerConnection.addIceCandidate(payload.data)
+            if (offerCollision && !isPolite) {
+              return // Ignore the offer if we are not polite
+            }
+
+            if (offerCollision) {
+              await Promise.all([
+                peerConnection.setLocalDescription({ type: 'rollback' }),
+                peerConnection.setRemoteDescription(payload.data)
+              ])
+            } else {
+              await peerConnection.setRemoteDescription(payload.data)
+            }
+
+            const answer = await peerConnection.createAnswer()
+            await peerConnection.setLocalDescription(answer)
+
+            channel.send({
+              type: 'broadcast',
+              event: 'signal',
+              payload: { type: 'answer', data: peerConnection.localDescription, senderId: myUserId }
+            })
+          } else if (payload.type === 'answer') {
+            if (peerConnection.signalingState === 'have-local-offer') {
+              await peerConnection.setRemoteDescription(payload.data)
+            }
+          } else if (payload.type === 'ice-candidate') {
+            await peerConnection.addIceCandidate(payload.data)
+          }
+        } catch (err) {
+          console.error('Error handling signaling message:', err)
         }
       })
       .subscribe(async (status) => {
@@ -223,21 +250,16 @@ export const useVideoCallStore = create<VideoCallState>((set, get) => ({
     }
 
     pc.ontrack = (event) => {
-      set((state) => {
-        let stream = state.remoteStream
-        if (!stream) stream = new MediaStream()
-        stream.addTrack(event.track)
-        return { remoteStream: new MediaStream(stream.getTracks()) }
-      })
+      set({ remoteStream: event.streams[0] })
     }
 
     pc.onicecandidate = (event) => {
-      const { channel } = get()
-      if (event.candidate && channel) {
+      const { channel, myUserId } = get()
+      if (event.candidate && channel && myUserId) {
         channel.send({
           type: 'broadcast',
           event: 'signal',
-          payload: { type: 'ice-candidate', data: event.candidate }
+          payload: { type: 'ice-candidate', data: event.candidate, senderId: myUserId }
         })
       }
     }

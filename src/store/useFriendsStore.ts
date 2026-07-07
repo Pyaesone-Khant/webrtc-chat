@@ -21,9 +21,9 @@ interface FriendsState {
   isSearching: boolean
   isLoading: boolean
   searchEmail: string
-  isMobileSidebarOpen: boolean
-  
-  setMobileSidebarOpen: (isOpen: boolean) => void
+  isSidebarOpen: boolean
+
+  toggleSidebar: () => void
   setSearchEmail: (val: string) => void
   searchUserByEmail: () => Promise<void>
   clearSearch: () => void
@@ -40,9 +40,9 @@ export const useFriendsStore = create<FriendsState>((set, get) => ({
   isSearching: false,
   isLoading: false,
   searchEmail: '',
-  isMobileSidebarOpen: false,
-  
-  setMobileSidebarOpen: (isOpen) => set({ isMobileSidebarOpen: isOpen }),
+  isSidebarOpen: false,
+
+  toggleSidebar: () => set({ isSidebarOpen: !get().isSidebarOpen }),
   setSearchEmail: (val) => set({ searchEmail: val, searchResult: null }),
 
   clearSearch: () => set({ searchEmail: '', searchResult: null, isSearching: false }),

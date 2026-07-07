@@ -23,13 +23,10 @@ export function FriendsList() {
     sendFriendRequest,
     acceptRequest,
     rejectRequest,
-    setMobileSidebarOpen
+    toggleSidebar,
   } = useFriendsStore()
 
   const { user } = useAuthStore()
-  const { setRoomName: setChatRoomName, joinRoom: joinChatRoom } =
-    useChatStore()
-  const { setRoomName: setVideoRoomName, setPendingCallFriendId } = useVideoCallStore()
   const navigate = useNavigate()
 
   const { sendCall } = useNotificationStore()
@@ -43,7 +40,7 @@ export function FriendsList() {
     const room = [user.id, friend.id].sort().join('_')
     useChatStore.setState({ roomName: room, callStatus: 'calling' })
     sendCall(friend.id, room, 'chat')
-    setMobileSidebarOpen(false)
+    toggleSidebar()
 
     navigate({ to: '/' }).then(() => {
       useChatStore.getState().joinRoom()
@@ -56,9 +53,9 @@ export function FriendsList() {
     useVideoCallStore.setState({
       roomName: room,
       pendingCallFriendId: friend.id,
-      callStatus: null
+      callStatus: null,
     })
-    setMobileSidebarOpen(false)
+    toggleSidebar()
     navigate({ to: '/video-call' })
   }
 
@@ -66,9 +63,9 @@ export function FriendsList() {
     <div className="flex flex-col h-full w-full bg-zinc-900 border-r border-zinc-800 font-sans">
       <div className="p-4 border-b border-zinc-800 flex justify-between items-center">
         <h2 className="text-lg font-semibold text-white">Friends</h2>
-        <button 
+        <button
           className="md:hidden p-2 text-zinc-400 hover:text-white"
-          onClick={() => setMobileSidebarOpen(false)}
+          onClick={() => toggleSidebar()}
         >
           <X size={20} />
         </button>
